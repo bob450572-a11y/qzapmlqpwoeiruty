@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import TabBar from "./TabBar";
 import AddressBar from "./AddressBar";
 import Toolbar from "./Toolbar";
@@ -16,8 +16,9 @@ interface Tab {
   historyIndex: number;
 }
 
+let tabCounter = 0;
 function generateId() {
-  return Math.random().toString(36).substring(2, 9);
+  return `tab_${Date.now()}_${tabCounter++}`;
 }
 
 function createNewTab(): Tab {
@@ -49,6 +50,9 @@ export default function BrowserFrame() {
   const [tabs, setTabs] = useState<Tab[]>([createNewTab()]);
   const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
   const [isLoading, setIsLoading] = useState(false);
+  const [addressFocused, setAddressFocused] = useState(false);
+  const addressBarRef = useRef<HTMLInputElement>(null);
+  const closedTabsRef = useRef<string[]>([]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 
@@ -161,11 +165,15 @@ export default function BrowserFrame() {
     (tabId: string) => {
       if (tabs.length === 1) {
         const newTab = createNewTab();
+        closedTabsRef.current.push(JSON.stringify(tabs[0]));
         setTabs([newTab]);
         setActiveTabId(newTab.id);
         return;
       }
       const currentIndex = tabs.findIndex((t) => t.id === tabId);
+      const closedTab = tabs.find((t) => t.id === tabId);
+      if (closedTab) closedTabsRef.current.push(JSON.stringify(closedTab));
+      if (closedTabsRef.current.length > 20) closedTabsRef.current.shift();
       const newTabs = tabs.filter((t) => t.id !== tabId);
       setTabs(newTabs);
       if (activeTabId === tabId) {
@@ -181,6 +189,101 @@ export default function BrowserFrame() {
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(newTab.id);
   }, []);
+
+  const handleReopenTab = useCallback(() => {
+    const last = closedTabsRef.current.pop();
+    if (last) {
+      const tab = JSON.parse(last) as Tab;
+      setTabs((prev) => [...prev, tab]);
+      setActiveTabId(tab.id);
+    }
+  }, []);
+
+  const focusAddressBar = useCallback(() => {
+    addressBarRef.current?.focus();
+    addressBarRef.current?.select();
+  }, []);
+
+  useEffect(() => {
+    function handleQuickNav(e: Event) {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.url) handleNavigate(detail.url);
+    }
+    function handleNewTabNav(e: Event) {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.url) {
+        const newTab = createNewTab();
+        setTabs((prev) => [...prev, newTab]);
+        setActiveTabId(newTab.id);
+        setTimeout(() => {
+          const url = detail.url;
+          if (isUrl(url)) {
+            const finalUrl = url.startsWith("http") ? url : "https://" + url;
+            updateTab(newTab.id, {
+              url: finalUrl,
+              searchQuery: null,
+              title: extractDomain(finalUrl),
+              history: [`url:${finalUrl}`],
+              historyIndex: 0,
+            });
+          }
+        }, 50);
+      }
+    }
+    window.addEventListener("__navigate", handleQuickNav);
+    window.addEventListener("__newTabNav", handleNewTabNav);
+    return () => {
+      window.removeEventListener("__navigate", handleQuickNav);
+      window.removeEventListener("__newTabNav", handleNewTabNav);
+    };
+  }, [handleNavigate, updateTab]);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      const ctrl = e.ctrlKey || e.metaKey;
+
+      if (ctrl && e.key === "t") {
+        e.preventDefault();
+        handleTabAdd();
+      } else if (ctrl && e.key === "w") {
+        e.preventDefault();
+        handleTabClose(activeTabId);
+      } else if (ctrl && e.shiftKey && e.key === "T") {
+        e.preventDefault();
+        handleReopenTab();
+      } else if (ctrl && (e.key === "l" || e.key === "L" || e.key === "e" || e.key === "E")) {
+        e.preventDefault();
+        focusAddressBar();
+      } else if (e.key === "F5" || (ctrl && e.key === "r")) {
+        e.preventDefault();
+        handleRefresh();
+      } else if (e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        handleBack();
+      } else if (e.altKey && e.key === "ArrowRight") {
+        e.preventDefault();
+        handleForward();
+      } else if (e.key === "Escape") {
+        if (isLoading) {
+          setIsLoading(false);
+        }
+      } else if (e.key === "F6" || (ctrl && e.key === "l")) {
+        e.preventDefault();
+        focusAddressBar();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeTabId, isLoading, handleTabAdd, handleTabClose, handleReopenTab, handleRefresh, handleBack, handleForward, focusAddressBar]);
+
+  const handleNewTabNavigate = useCallback(
+    (input: string) => {
+      handleNavigate(input);
+      setAddressFocused(false);
+    },
+    [handleNavigate]
+  );
 
   const displayUrl = activeTab.searchQuery || activeTab.url;
 
@@ -205,16 +308,13 @@ export default function BrowserFrame() {
           onHome={handleHome}
         />
         <AddressBar
+          ref={addressBarRef}
           url={displayUrl}
           isLoading={isLoading}
-          onNavigate={handleNavigate}
+          onNavigate={handleNewTabNavigate}
+          onFocusChange={setAddressFocused}
         />
         <div className="flex items-center gap-1 px-1">
-          <button className="nav-button" title="Extensions">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-            </svg>
-          </button>
           <button className="nav-button" title="Menu">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />

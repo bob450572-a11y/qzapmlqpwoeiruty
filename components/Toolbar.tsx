@@ -22,12 +22,12 @@ export default function Toolbar({
   onHome,
 }: ToolbarProps) {
   return (
-    <div className="flex items-center gap-1 px-1">
+    <div className="flex items-center gap-0.5 px-1">
       <button
         onClick={onBack}
         disabled={!canGoBack}
         className="nav-button"
-        title="Back"
+        title="Back (Alt+Left)"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
@@ -38,7 +38,7 @@ export default function Toolbar({
         onClick={onForward}
         disabled={!canGoForward}
         className="nav-button"
-        title="Forward"
+        title="Forward (Alt+Right)"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
@@ -46,9 +46,9 @@ export default function Toolbar({
       </button>
 
       <button
-        onClick={isLoading ? onRefresh : onRefresh}
+        onClick={onRefresh}
         className="nav-button"
-        title="Refresh"
+        title={isLoading ? "Stop (Esc)" : "Refresh (F5)"}
       >
         {isLoading ? (
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
