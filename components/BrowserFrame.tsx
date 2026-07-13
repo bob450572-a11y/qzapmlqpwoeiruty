@@ -41,8 +41,9 @@ function extractDomain(url: string): string {
 }
 
 function isUrl(input: string): boolean {
-  if (/^https?:\/\//i.test(input)) return true;
-  if (/^[a-zA-Z0-9]([a-zA-Z0-9-]*\.)+[a-zA-Z]{2,}(\/\S*)?$/.test(input)) return true;
+  const trimmed = input.trim();
+  if (/^https?:\/\//i.test(trimmed)) return true;
+  if (/^[a-zA-Z0-9]([a-zA-Z0-9-]*\.)+[a-zA-Z]{2,}(\/\S*)?$/.test(trimmed)) return true;
   return false;
 }
 
@@ -71,9 +72,13 @@ export default function BrowserFrame() {
       const tab = tabs.find((t) => t.id === tabId);
       if (!tab) return;
 
-      if (isUrl(input)) {
-        const url = input.startsWith("http") ? input : "https://" + input;
-        const newHistory = [...tab.history.slice(0, tab.historyIndex + 1), `url:${url}`];
+      const trimmed = input.trim();
+      if (!trimmed) return;
+
+      if (isUrl(trimmed)) {
+        const url = trimmed.startsWith("http") ? trimmed : "https://" + trimmed;
+        const entry = `url:${url}`;
+        const newHistory = [...tab.history.slice(0, tab.historyIndex + 1), entry];
         updateTab(tabId, {
           url,
           searchQuery: null,
@@ -82,15 +87,17 @@ export default function BrowserFrame() {
           title: extractDomain(url),
         });
       } else {
-        const newHistory = [...tab.history.slice(0, tab.historyIndex + 1), `search:${input}`];
+        const entry = `search:${trimmed}`;
+        const newHistory = [...tab.history.slice(0, tab.historyIndex + 1), entry];
         updateTab(tabId, {
           url: "",
-          searchQuery: input,
+          searchQuery: trimmed,
           history: newHistory,
           historyIndex: newHistory.length - 1,
-          title: `${input} - Search`,
+          title: `${trimmed} - Search`,
         });
       }
+      setIsLoading(true);
     },
     [activeTab, tabs, updateTab]
   );
@@ -122,6 +129,7 @@ export default function BrowserFrame() {
     const newIndex = tab.historyIndex - 1;
     updateTab(activeTabId, { historyIndex: newIndex });
     navigateToEntry(activeTabId, tab.history[newIndex]);
+    setIsLoading(true);
   }, [tabs, activeTabId, updateTab, navigateToEntry]);
 
   const handleForward = useCallback(() => {
@@ -130,6 +138,7 @@ export default function BrowserFrame() {
     const newIndex = tab.historyIndex + 1;
     updateTab(activeTabId, { historyIndex: newIndex });
     navigateToEntry(activeTabId, tab.history[newIndex]);
+    setIsLoading(true);
   }, [tabs, activeTabId, updateTab, navigateToEntry]);
 
   const handleRefresh = useCallback(() => {
@@ -145,6 +154,7 @@ export default function BrowserFrame() {
       updateTab(activeTabId, { url: "" });
       setTimeout(() => updateTab(activeTabId, { url: u }), 50);
     }
+    setIsLoading(true);
   }, [tabs, activeTabId, updateTab]);
 
   const handleHome = useCallback(() => {
@@ -155,6 +165,7 @@ export default function BrowserFrame() {
       history: [],
       historyIndex: -1,
     });
+    setIsLoading(false);
   }, [activeTabId, updateTab]);
 
   const handleTabSelect = useCallback((tabId: string) => {
@@ -204,6 +215,27 @@ export default function BrowserFrame() {
     addressBarRef.current?.select();
   }, []);
 
+  const handleIframeNavigate = useCallback(
+    (url: string) => {
+      const tabId = activeTabId;
+      const tab = tabs.find((t) => t.id === tabId);
+      if (!tab) return;
+
+      const cleanUrl = url;
+      const entry = `url:${cleanUrl}`;
+      const newHistory = [...tab.history.slice(0, tab.historyIndex + 1), entry];
+      updateTab(tabId, {
+        url: cleanUrl,
+        searchQuery: null,
+        history: newHistory,
+        historyIndex: newHistory.length - 1,
+        title: extractDomain(cleanUrl),
+      });
+      setIsLoading(true);
+    },
+    [activeTabId, tabs, updateTab]
+  );
+
   useEffect(() => {
     function handleQuickNav(e: Event) {
       const detail = (e as CustomEvent).detail;
@@ -248,10 +280,10 @@ export default function BrowserFrame() {
       } else if (ctrl && e.key === "w") {
         e.preventDefault();
         handleTabClose(activeTabId);
-      } else if (ctrl && e.shiftKey && e.key === "T") {
+      } else if (ctrl && e.shiftKey && (e.key === "T" || e.key === "t")) {
         e.preventDefault();
         handleReopenTab();
-      } else if (ctrl && (e.key === "l" || e.key === "L" || e.key === "e" || e.key === "E")) {
+      } else if (ctrl && (e.key === "l" || e.key === "L")) {
         e.preventDefault();
         focusAddressBar();
       } else if (e.key === "F5" || (ctrl && e.key === "r")) {
@@ -267,7 +299,7 @@ export default function BrowserFrame() {
         if (isLoading) {
           setIsLoading(false);
         }
-      } else if (e.key === "F6" || (ctrl && e.key === "l")) {
+      } else if (e.key === "F6") {
         e.preventDefault();
         focusAddressBar();
       }
@@ -275,7 +307,17 @@ export default function BrowserFrame() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeTabId, isLoading, handleTabAdd, handleTabClose, handleReopenTab, handleRefresh, handleBack, handleForward, focusAddressBar]);
+  }, [
+    activeTabId,
+    isLoading,
+    handleTabAdd,
+    handleTabClose,
+    handleReopenTab,
+    handleRefresh,
+    handleBack,
+    handleForward,
+    focusAddressBar,
+  ]);
 
   const handleNewTabNavigate = useCallback(
     (input: string) => {
@@ -331,7 +373,7 @@ export default function BrowserFrame() {
       ) : (
         <BrowserContent
           url={activeTab.url}
-          onUrlChange={(url) => updateTab(activeTabId, { url, title: extractDomain(url) })}
+          onNavigate={handleIframeNavigate}
           onTitleChange={(title) => updateTab(activeTabId, { title })}
           onLoadStart={() => setIsLoading(true)}
           onLoadEnd={() => setIsLoading(false)}

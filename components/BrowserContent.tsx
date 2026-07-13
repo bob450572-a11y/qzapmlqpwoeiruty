@@ -4,15 +4,23 @@ import React, { useRef, useEffect, useState, useCallback } from "react";
 
 interface BrowserContentProps {
   url: string;
-  onUrlChange: (url: string) => void;
+  onNavigate: (url: string) => void;
   onTitleChange: (title: string) => void;
   onLoadStart: () => void;
   onLoadEnd: () => void;
 }
 
+function extractDomain(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
 export default function BrowserContent({
   url,
-  onUrlChange,
+  onNavigate,
   onTitleChange,
   onLoadStart,
   onLoadEnd,
@@ -20,56 +28,62 @@ export default function BrowserContent({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [iframeKey, setIframeKey] = useState(0);
+  const [loadTimeout, setLoadTimeout] = useState(false);
   const skipNextLoadRef = useRef(false);
   const urlRef = useRef(url);
   const onLoadStartRef = useRef(onLoadStart);
   const onLoadEndRef = useRef(onLoadEnd);
   const onTitleChangeRef = useRef(onTitleChange);
-  const onUrlChangeRef = useRef(onUrlChange);
+  const onNavigateRef = useRef(onNavigate);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   onLoadStartRef.current = onLoadStart;
   onLoadEndRef.current = onLoadEnd;
   onTitleChangeRef.current = onTitleChange;
-  onUrlChangeRef.current = onUrlChange;
+  onNavigateRef.current = onNavigate;
 
   const prevUrlRef = useRef(url);
 
   useEffect(() => {
     setError(null);
+    setLoadTimeout(false);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+
     if (url && url !== prevUrlRef.current && !skipNextLoadRef.current) {
       onLoadStartRef.current();
       setIframeKey((k) => k + 1);
+      timeoutRef.current = setTimeout(() => {
+        setLoadTimeout(true);
+      }, 30000);
     }
     skipNextLoadRef.current = false;
     prevUrlRef.current = url;
+
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
   }, [url]);
 
   const handleLoad = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setLoadTimeout(false);
     onLoadEndRef.current();
+
     try {
       const iframe = iframeRef.current;
       if (iframe && iframe.contentDocument) {
         const title = iframe.contentDocument.title;
-        if (title) onTitleChangeRef.current(title);
-        try {
-          const currentUrl = iframe.contentWindow?.location?.href;
-          if (currentUrl) {
-            const parsedUrl = new URL(currentUrl);
-            const decodedUrl = parsedUrl.searchParams.get("url");
-            if (decodedUrl) {
-              const extracted = decodeURIComponent(decodedUrl);
-              if (extracted !== urlRef.current) {
-                skipNextLoadRef.current = true;
-                onUrlChangeRef.current(extracted);
-              }
-            }
-          }
-        } catch {}
+        if (title && title.length > 0 && title !== "about:blank") {
+          onTitleChangeRef.current(title);
+        }
       }
-    } catch {}
+    } catch {
+      // Cross-origin - can't read title
+    }
   }, []);
 
   const handleError = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     onLoadEndRef.current();
     setError("net::ERR_CONNECTION_FAILED");
   }, []);
@@ -78,9 +92,12 @@ export default function BrowserContent({
     function handleMessage(e: MessageEvent) {
       if (e.data && e.data.__nav && e.data.url) {
         if (e.data.newTab) {
-          window.dispatchEvent(new CustomEvent("__newTabNav", { detail: { url: e.data.url } }));
+          window.dispatchEvent(
+            new CustomEvent("__newTabNav", { detail: { url: e.data.url } })
+          );
+        } else {
+          onNavigateRef.current(e.data.url);
         }
-        onUrlChangeRef.current(e.data.url);
       }
     }
     window.addEventListener("message", handleMessage);
@@ -100,44 +117,31 @@ export default function BrowserContent({
             </svg>
           </div>
           <h2 className="text-2xl font-light mb-3 text-gray-700">qzapmlqpwoeiruty</h2>
-          <p className="text-sm text-gray-400 mb-6">A virtual browser. Type a URL or search term above to get started.</p>
+          <p className="text-sm text-gray-400 mb-8">
+            A virtual browser. Type a URL or search term above.
+          </p>
           <div className="grid grid-cols-2 gap-3 max-w-xs mx-auto">
-            <button
-              onClick={() => {
-                window.dispatchEvent(new CustomEvent("__navigate", { detail: { url: "https://wikipedia.org" } }));
-              }}
-              className="flex items-center gap-2 p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors text-left"
-            >
-              <span className="text-lg">W</span>
-              <span className="text-[12px] text-gray-600 truncate">Wikipedia</span>
-            </button>
-            <button
-              onClick={() => {
-                window.dispatchEvent(new CustomEvent("__navigate", { detail: { url: "https://reddit.com" } }));
-              }}
-              className="flex items-center gap-2 p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors text-left"
-            >
-              <span className="text-lg">R</span>
-              <span className="text-[12px] text-gray-600 truncate">Reddit</span>
-            </button>
-            <button
-              onClick={() => {
-                window.dispatchEvent(new CustomEvent("__navigate", { detail: { url: "https://youtube.com" } }));
-              }}
-              className="flex items-center gap-2 p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors text-left"
-            >
-              <span className="text-lg">Y</span>
-              <span className="text-[12px] text-gray-600 truncate">YouTube</span>
-            </button>
-            <button
-              onClick={() => {
-                window.dispatchEvent(new CustomEvent("__navigate", { detail: { url: "https://github.com" } }));
-              }}
-              className="flex items-center gap-2 p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors text-left"
-            >
-              <span className="text-lg">G</span>
-              <span className="text-[12px] text-gray-600 truncate">GitHub</span>
-            </button>
+            {[
+              { name: "Wikipedia", url: "https://wikipedia.org", letter: "W" },
+              { name: "Reddit", url: "https://reddit.com", letter: "R" },
+              { name: "YouTube", url: "https://youtube.com", letter: "Y" },
+              { name: "GitHub", url: "https://github.com", letter: "G" },
+            ].map((site) => (
+              <button
+                key={site.name}
+                onClick={() => {
+                  window.dispatchEvent(
+                    new CustomEvent("__navigate", {
+                      detail: { url: site.url },
+                    })
+                  );
+                }}
+                className="flex items-center gap-2 p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+              >
+                <span className="text-lg">{site.letter}</span>
+                <span className="text-[12px] text-gray-600 truncate">{site.name}</span>
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -148,12 +152,18 @@ export default function BrowserContent({
     return (
       <div className="flex-1 flex items-center justify-center bg-white">
         <div className="text-center max-w-md px-4">
-          <svg className="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M18.364 5.636a9 9 0 010 12.728m-2.829-2.829a5 5 0 000-7.07m-4.243 2.122a1.5 1.5 0 112.121 2.121 1.5 1.5 0 01-2.121-2.121zM12 3a9 9 0 019 9" />
-          </svg>
-          <h2 className="text-xl font-normal mb-2 text-gray-700">This site can&apos;t be reached</h2>
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
+            <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M18.364 5.636a9 9 0 010 12.728m-2.829-2.829a5 5 0 000-7.07m-4.243 2.122a1.5 1.5 0 112.121 2.121 1.5 1.5 0 01-2.121-2.121zM12 3a9 9 0 019 9" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-normal mb-2 text-gray-700">
+            This site can&apos;t be reached
+          </h2>
           <p className="text-sm text-gray-500 mb-1 font-mono">{extractDomain(url)}</p>
-          <p className="text-sm text-gray-400 mb-6">The site refused the connection or timed out.</p>
+          <p className="text-sm text-gray-400 mb-6">
+            The site refused the connection or timed out.
+          </p>
           <div className="flex gap-3 justify-center">
             <button
               onClick={() => {
@@ -168,7 +178,9 @@ export default function BrowserContent({
             <button
               onClick={() => {
                 setError(null);
-                onUrlChangeRef.current("");
+                window.dispatchEvent(
+                  new CustomEvent("__navigate", { detail: { url: "" } })
+                );
               }}
               className="px-5 py-2 bg-gray-100 text-gray-600 text-sm rounded-lg hover:bg-gray-200 transition-colors"
             >
@@ -182,6 +194,20 @@ export default function BrowserContent({
 
   return (
     <div className="flex-1 relative bg-white">
+      {loadTimeout && (
+        <div className="absolute top-2 right-2 z-10 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 text-xs text-yellow-700 shadow-sm">
+          Still loading...
+          <button
+            onClick={() => {
+              setLoadTimeout(false);
+              onLoadEndRef.current();
+            }}
+            className="ml-2 underline hover:text-yellow-900"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <iframe
         key={iframeKey}
         ref={iframeRef}
@@ -194,12 +220,4 @@ export default function BrowserContent({
       />
     </div>
   );
-}
-
-function extractDomain(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
-  }
 }
