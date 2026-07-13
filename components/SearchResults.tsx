@@ -15,6 +15,14 @@ interface AbstractResult {
   source: string;
 }
 
+interface SearchData {
+  results: SearchResult[];
+  abstract: AbstractResult | null;
+  suggestions: string[];
+  query: string;
+  error?: string;
+}
+
 interface SearchResultsProps {
   query: string;
   onNavigate: (url: string) => void;
@@ -28,21 +36,19 @@ function extractDomain(url: string): string {
   }
 }
 
-function getFaviconUrl(url: string): string {
+function faviconProxy(url: string): string {
   try {
     const domain = new URL(url).hostname;
-    return `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
+    return `/api/proxy?url=${encodeURIComponent(`https://www.google.com/s2/favicons?domain=${domain}&sz=16`)}`;
   } catch {
     return "";
   }
 }
 
 export default function SearchResults({ query, onNavigate }: SearchResultsProps) {
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [abstract, setAbstract] = useState<AbstractResult | null>(null);
+  const [data, setData] = useState<SearchData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -53,74 +59,15 @@ export default function SearchResults({ query, onNavigate }: SearchResultsProps)
     let cancelled = false;
     setLoading(true);
     setError(null);
-    setResults([]);
-    setAbstract(null);
-    setSuggestions([]);
+    setData(null);
 
-    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-
-    fetch(url)
+    fetch(`/api/search?q=${encodeURIComponent(query)}`)
       .then((r) => r.json())
-      .then((data: Record<string, unknown>) => {
-        if (cancelled) return;
-
-        if (data.AbstractURL && data.AbstractText) {
-          setAbstract({
-            heading: (data.Heading as string) || query,
-            text: data.AbstractText as string,
-            url: data.AbstractURL as string,
-            source: (data.AbstractSource as string) || "",
-          });
-        }
-
-        const out: SearchResult[] = [];
-
-        if (data.Redirect) {
-          out.push({
-            title: (data.Heading as string) || query,
-            url: data.Redirect as string,
-            snippet: (data.AbstractText as string) || "",
-          });
-        }
-
-        const ddgResults = data.Results as { Text: string; FirstURL: string }[] | undefined;
-        if (ddgResults) {
-          for (const r of ddgResults) {
-            if (r.Text && r.FirstURL) {
-              out.push({ title: r.Text, url: r.FirstURL, snippet: "" });
-            }
-          }
-        }
-
-        const topics = data.RelatedTopics as { Text?: string; FirstURL?: string; Topics?: { Text: string; FirstURL: string }[] }[] | undefined;
-        if (topics) {
-          for (const t of topics) {
-            if (t.Topics) {
-              for (const sub of t.Topics) {
-                if (sub.Text && sub.FirstURL) {
-                  out.push({
-                    title: sub.Text.split(" - ")[0] || sub.Text.substring(0, 80),
-                    url: sub.FirstURL,
-                    snippet: sub.Text,
-                  });
-                }
-              }
-            } else if (t.Text && t.FirstURL) {
-              out.push({
-                title: t.Text.split(" - ")[0] || t.Text.substring(0, 80),
-                url: t.FirstURL,
-                snippet: t.Text,
-              });
-            }
-          }
-        }
-
-        setResults(out);
-        setLoading(false);
-
-        const related = data.RelatedQueries as { Text: string; FirstURL: string }[] | undefined;
-        if (related && related.length > 0) {
-          setSuggestions(related.slice(0, 8).map((r) => r.Text));
+      .then((result: SearchData) => {
+        if (!cancelled) {
+          setData(result);
+          setLoading(false);
+          if (result.error) setError(result.error);
         }
       })
       .catch((err) => {
@@ -164,6 +111,10 @@ export default function SearchResults({ query, onNavigate }: SearchResultsProps)
     );
   }
 
+  const results = data?.results || [];
+  const abstract = data?.abstract;
+  const suggestions = data?.suggestions || [];
+
   return (
     <div className="flex-1 overflow-y-auto bg-white">
       <div className="w-full max-w-[700px] mx-auto px-4 py-4">
@@ -197,20 +148,16 @@ export default function SearchResults({ query, onNavigate }: SearchResultsProps)
 
         {abstract && (
           <div className="mb-6 p-4 bg-gray-50 rounded-xl border border-gray-200">
-            <div className="flex items-start gap-3">
-              <div className="flex-1">
-                <h3 className="text-[16px] font-medium text-gray-900 mb-1">{abstract.heading}</h3>
-                <p className="text-[13px] text-gray-600 leading-relaxed mb-2">{abstract.text}</p>
-                {abstract.source && (
-                  <button
-                    onClick={() => onNavigate(abstract.url)}
-                    className="text-[12px] text-blue-600 hover:underline"
-                  >
-                    Read more on {abstract.source}
-                  </button>
-                )}
-              </div>
-            </div>
+            <h3 className="text-[16px] font-medium text-gray-900 mb-1">{abstract.heading}</h3>
+            <p className="text-[13px] text-gray-600 leading-relaxed mb-2">{abstract.text}</p>
+            {abstract.source && (
+              <button
+                onClick={() => onNavigate(abstract.url)}
+                className="text-[12px] text-blue-600 hover:underline"
+              >
+                Read more on {abstract.source}
+              </button>
+            )}
           </div>
         )}
 
@@ -238,7 +185,7 @@ export default function SearchResults({ query, onNavigate }: SearchResultsProps)
           <div>
             {results.map((r, i) => {
               const domain = extractDomain(r.url);
-              const favicon = getFaviconUrl(r.url);
+              const favicon = faviconProxy(r.url);
               return (
                 <div
                   key={i}
@@ -247,7 +194,12 @@ export default function SearchResults({ query, onNavigate }: SearchResultsProps)
                 >
                   <div className="flex items-center gap-2 mb-1">
                     {favicon && (
-                      <img src={favicon} alt="" className="w-4 h-4 rounded-sm" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                      <img
+                        src={favicon}
+                        alt=""
+                        className="w-4 h-4 rounded-sm"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      />
                     )}
                     <span className="text-[12px] text-gray-500 truncate">{domain}</span>
                     <svg className="w-3 h-3 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" fill="none" stroke="currentColor" viewBox="0 0 24 24">
