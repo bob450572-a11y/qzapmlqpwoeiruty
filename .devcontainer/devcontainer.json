@@ -1,7 +1,12 @@
 {
   "name": "Virtual Browser",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "postCreateCommand": "chmod +x browser-setup.sh && bash browser-setup.sh",
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
+  },
+  "postCreateCommand": "wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /tmp/cloudflared && sudo install -m 755 /tmp/cloudflared /usr/local/bin/cloudflared && chmod +x browser-setup.sh && bash browser-setup.sh",
   "forwardPorts": [6080, 9222],
   "portsAttributes": {
     "6080": {

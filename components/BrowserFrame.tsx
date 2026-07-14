@@ -4,32 +4,20 @@ import React, { useState, useCallback, useEffect, useRef } from "react";
 import TabBar from "./TabBar";
 import AddressBar from "./AddressBar";
 import Toolbar from "./Toolbar";
-import BrowserContent from "./BrowserContent";
-import SearchResults from "./SearchResults";
+import VirtualBrowser from "./VirtualBrowser";
 
-interface Tab {
-  id: string;
-  title: string;
-  url: string;
-  searchQuery: string | null;
-  history: string[];
-  historyIndex: number;
+type SessionStatus = "idle" | "creating" | "starting" | "ready" | "error";
+
+interface Session {
+  codespaceName: string;
+  tunnelUrl: string | null;
+  status: SessionStatus;
+  error?: string;
 }
 
 let tabCounter = 0;
 function generateId() {
   return `tab_${Date.now()}_${tabCounter++}`;
-}
-
-function createNewTab(): Tab {
-  return {
-    id: generateId(),
-    title: "New Tab",
-    url: "",
-    searchQuery: null,
-    history: [],
-    historyIndex: -1,
-  };
 }
 
 function extractDomain(url: string): string {
@@ -48,312 +36,164 @@ function isUrl(input: string): boolean {
 }
 
 export default function BrowserFrame() {
-  const [tabs, setTabs] = useState<Tab[]>([createNewTab()]);
-  const [activeTabId, setActiveTabId] = useState<string>(tabs[0].id);
-  const [isLoading, setIsLoading] = useState(false);
+  const [addressValue, setAddressValue] = useState("");
+  const [session, setSession] = useState<Session | null>(null);
   const [addressFocused, setAddressFocused] = useState(false);
   const addressBarRef = useRef<HTMLInputElement>(null);
-  const closedTabsRef = useRef<string[]>([]);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+  const currentUrl = addressValue.trim();
 
-  const updateTab = useCallback(
-    (tabId: string, updates: Partial<Tab>) => {
-      setTabs((prev) =>
-        prev.map((t) => (t.id === tabId ? { ...t, ...updates } : t))
-      );
-    },
-    []
-  );
+  const cleanupPoll = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const createSession = useCallback(async (targetUrl: string) => {
+    setSession({ codespaceName: "", tunnelUrl: null, status: "creating" });
+
+    try {
+      const res = await fetch("/api/session", { method: "POST" });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setSession({ codespaceName: "", tunnelUrl: null, status: "error", error: data.error });
+        return;
+      }
+
+      setSession({
+        codespaceName: data.codespaceName,
+        tunnelUrl: null,
+        status: "starting",
+      });
+
+      pollRef.current = setInterval(async () => {
+        try {
+          const pollRes = await fetch(`/api/session?id=${encodeURIComponent(data.codespaceName)}`);
+          const pollData = await pollRes.json();
+
+          if (pollData.tunnelUrl) {
+            cleanupPoll();
+            setSession({
+              codespaceName: data.codespaceName,
+              tunnelUrl: pollData.tunnelUrl,
+              status: "ready",
+            });
+          } else if (pollData.status === "Failed" || pollData.status === "Unknown") {
+            cleanupPoll();
+            setSession({
+              codespaceName: data.codespaceName,
+              tunnelUrl: null,
+              status: "error",
+              error: "Codespace failed to start",
+            });
+          }
+        } catch {
+          // keep polling
+        }
+      }, 3000);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSession({ codespaceName: "", tunnelUrl: null, status: "error", error: msg });
+    }
+  }, [cleanupPoll]);
 
   const handleNavigate = useCallback(
     (input: string) => {
-      const tabId = activeTab.id;
-      const tab = tabs.find((t) => t.id === tabId);
-      if (!tab) return;
-
       const trimmed = input.trim();
       if (!trimmed) return;
 
-      if (isUrl(trimmed)) {
-        const url = trimmed.startsWith("http") ? trimmed : "https://" + trimmed;
-        const entry = `url:${url}`;
-        const newHistory = [...tab.history.slice(0, tab.historyIndex + 1), entry];
-        updateTab(tabId, {
-          url,
-          searchQuery: null,
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-          title: extractDomain(url),
-        });
+      let url = trimmed;
+      if (!isUrl(trimmed)) {
+        url = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
       } else {
-        const entry = `search:${trimmed}`;
-        const newHistory = [...tab.history.slice(0, tab.historyIndex + 1), entry];
-        updateTab(tabId, {
-          url: "",
-          searchQuery: trimmed,
-          history: newHistory,
-          historyIndex: newHistory.length - 1,
-          title: `${trimmed} - Search`,
-        });
+        url = trimmed.startsWith("http") ? trimmed : "https://" + trimmed;
       }
-      setIsLoading(true);
+
+      setAddressValue(url);
+      createSession(url);
     },
-    [activeTab, tabs, updateTab]
+    [createSession]
   );
 
-  const navigateToEntry = useCallback(
-    (tabId: string, entry: string) => {
-      if (entry.startsWith("search:")) {
-        const query = entry.slice(7);
-        updateTab(tabId, {
-          url: "",
-          searchQuery: query,
-          title: `${query} - Search`,
+  const handleClose = useCallback(async () => {
+    cleanupPoll();
+    if (session?.codespaceName) {
+      try {
+        await fetch(`/api/session?id=${encodeURIComponent(session.codespaceName)}`, {
+          method: "DELETE",
         });
-      } else if (entry.startsWith("url:")) {
-        const url = entry.slice(4);
-        updateTab(tabId, {
-          url,
-          searchQuery: null,
-          title: extractDomain(url),
-        });
-      }
-    },
-    [updateTab]
-  );
-
-  const handleBack = useCallback(() => {
-    const tab = tabs.find((t) => t.id === activeTabId);
-    if (!tab || tab.historyIndex <= 0) return;
-    const newIndex = tab.historyIndex - 1;
-    updateTab(activeTabId, { historyIndex: newIndex });
-    navigateToEntry(activeTabId, tab.history[newIndex]);
-    setIsLoading(true);
-  }, [tabs, activeTabId, updateTab, navigateToEntry]);
-
-  const handleForward = useCallback(() => {
-    const tab = tabs.find((t) => t.id === activeTabId);
-    if (!tab || tab.historyIndex >= tab.history.length - 1) return;
-    const newIndex = tab.historyIndex + 1;
-    updateTab(activeTabId, { historyIndex: newIndex });
-    navigateToEntry(activeTabId, tab.history[newIndex]);
-    setIsLoading(true);
-  }, [tabs, activeTabId, updateTab, navigateToEntry]);
-
-  const handleRefresh = useCallback(() => {
-    const tab = tabs.find((t) => t.id === activeTabId);
-    if (!tab) return;
-
-    if (tab.searchQuery) {
-      const q = tab.searchQuery;
-      updateTab(activeTabId, { searchQuery: null });
-      setTimeout(() => updateTab(activeTabId, { searchQuery: q }), 50);
-    } else if (tab.url) {
-      const u = tab.url;
-      updateTab(activeTabId, { url: "" });
-      setTimeout(() => updateTab(activeTabId, { url: u }), 50);
+      } catch {}
     }
-    setIsLoading(true);
-  }, [tabs, activeTabId, updateTab]);
-
-  const handleHome = useCallback(() => {
-    updateTab(activeTabId, {
-      url: "",
-      searchQuery: null,
-      title: "New Tab",
-      history: [],
-      historyIndex: -1,
-    });
-    setIsLoading(false);
-  }, [activeTabId, updateTab]);
-
-  const handleTabSelect = useCallback((tabId: string) => {
-    setActiveTabId(tabId);
-  }, []);
-
-  const handleTabClose = useCallback(
-    (tabId: string) => {
-      if (tabs.length === 1) {
-        const newTab = createNewTab();
-        closedTabsRef.current.push(JSON.stringify(tabs[0]));
-        setTabs([newTab]);
-        setActiveTabId(newTab.id);
-        return;
-      }
-      const currentIndex = tabs.findIndex((t) => t.id === tabId);
-      const closedTab = tabs.find((t) => t.id === tabId);
-      if (closedTab) closedTabsRef.current.push(JSON.stringify(closedTab));
-      if (closedTabsRef.current.length > 20) closedTabsRef.current.shift();
-      const newTabs = tabs.filter((t) => t.id !== tabId);
-      setTabs(newTabs);
-      if (activeTabId === tabId) {
-        const newIndex = Math.min(currentIndex, newTabs.length - 1);
-        setActiveTabId(newTabs[newIndex].id);
-      }
-    },
-    [tabs, activeTabId]
-  );
-
-  const handleTabAdd = useCallback(() => {
-    const newTab = createNewTab();
-    setTabs((prev) => [...prev, newTab]);
-    setActiveTabId(newTab.id);
-  }, []);
-
-  const handleReopenTab = useCallback(() => {
-    const last = closedTabsRef.current.pop();
-    if (last) {
-      const tab = JSON.parse(last) as Tab;
-      setTabs((prev) => [...prev, tab]);
-      setActiveTabId(tab.id);
-    }
-  }, []);
-
-  const focusAddressBar = useCallback(() => {
-    addressBarRef.current?.focus();
-    addressBarRef.current?.select();
-  }, []);
-
-  const handleIframeNavigate = useCallback(
-    (url: string) => {
-      const tabId = activeTabId;
-      const tab = tabs.find((t) => t.id === tabId);
-      if (!tab) return;
-
-      const cleanUrl = url;
-      const entry = `url:${cleanUrl}`;
-      const newHistory = [...tab.history.slice(0, tab.historyIndex + 1), entry];
-      updateTab(tabId, {
-        url: cleanUrl,
-        searchQuery: null,
-        history: newHistory,
-        historyIndex: newHistory.length - 1,
-        title: extractDomain(cleanUrl),
-      });
-      setIsLoading(true);
-    },
-    [activeTabId, tabs, updateTab]
-  );
+    setSession(null);
+    setAddressValue("");
+  }, [session, cleanupPoll]);
 
   useEffect(() => {
-    function handleQuickNav(e: Event) {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.url) handleNavigate(detail.url);
-    }
-    function handleNewTabNav(e: Event) {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.url) {
-        const newTab = createNewTab();
-        setTabs((prev) => [...prev, newTab]);
-        setActiveTabId(newTab.id);
-        setTimeout(() => {
-          const url = detail.url;
-          if (isUrl(url)) {
-            const finalUrl = url.startsWith("http") ? url : "https://" + url;
-            updateTab(newTab.id, {
-              url: finalUrl,
-              searchQuery: null,
-              title: extractDomain(finalUrl),
-              history: [`url:${finalUrl}`],
-              historyIndex: 0,
-            });
-          }
-        }, 50);
-      }
-    }
-    window.addEventListener("__navigate", handleQuickNav);
-    window.addEventListener("__newTabNav", handleNewTabNav);
-    return () => {
-      window.removeEventListener("__navigate", handleQuickNav);
-      window.removeEventListener("__newTabNav", handleNewTabNav);
-    };
-  }, [handleNavigate, updateTab]);
+    return () => cleanupPoll();
+  }, [cleanupPoll]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const ctrl = e.ctrlKey || e.metaKey;
-
-      if (ctrl && e.key === "t") {
+      if (ctrl && (e.key === "l" || e.key === "L")) {
         e.preventDefault();
-        handleTabAdd();
-      } else if (ctrl && e.key === "w") {
-        e.preventDefault();
-        handleTabClose(activeTabId);
-      } else if (ctrl && e.shiftKey && (e.key === "T" || e.key === "t")) {
-        e.preventDefault();
-        handleReopenTab();
-      } else if (ctrl && (e.key === "l" || e.key === "L")) {
-        e.preventDefault();
-        focusAddressBar();
-      } else if (e.key === "F5" || (ctrl && e.key === "r")) {
-        e.preventDefault();
-        handleRefresh();
-      } else if (e.altKey && e.key === "ArrowLeft") {
-        e.preventDefault();
-        handleBack();
-      } else if (e.altKey && e.key === "ArrowRight") {
-        e.preventDefault();
-        handleForward();
-      } else if (e.key === "Escape") {
-        if (isLoading) {
-          setIsLoading(false);
-        }
+        addressBarRef.current?.focus();
+        addressBarRef.current?.select();
       } else if (e.key === "F6") {
         e.preventDefault();
-        focusAddressBar();
+        addressBarRef.current?.focus();
+        addressBarRef.current?.select();
       }
     }
-
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [
-    activeTabId,
-    isLoading,
-    handleTabAdd,
-    handleTabClose,
-    handleReopenTab,
-    handleRefresh,
-    handleBack,
-    handleForward,
-    focusAddressBar,
-  ]);
+  }, []);
 
-  const handleNewTabNavigate = useCallback(
-    (input: string) => {
-      handleNavigate(input);
-      setAddressFocused(false);
-    },
-    [handleNavigate]
-  );
-
-  const displayUrl = activeTab.searchQuery || activeTab.url;
+  const sessionStatus = session?.status || "idle";
 
   return (
     <div className="flex flex-col h-screen bg-chrome-bg select-none">
-      <TabBar
-        tabs={tabs}
-        activeTabId={activeTabId}
-        onTabSelect={handleTabSelect}
-        onTabClose={handleTabClose}
-        onTabAdd={handleTabAdd}
-      />
+      <div className="flex items-end bg-chrome-bg h-[46px] px-2 pt-2 gap-[1px]">
+        <div className="group flex items-center gap-2 h-[34px] px-3 rounded-t-lg cursor-pointer transition-colors duration-100 max-w-[240px] min-w-[60px] bg-white border-t border-l border-r border-chrome-border">
+          <svg className="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" strokeWidth="1.5" />
+          </svg>
+          <span className="text-[12px] text-chrome-textDark truncate flex-1">
+            {sessionStatus === "idle"
+              ? "New Tab"
+              : sessionStatus === "ready"
+              ? extractDomain(currentUrl || "Browser")
+              : "Starting..."}
+          </span>
+        </div>
+      </div>
 
       <div className="flex items-center bg-white border-b border-chrome-border px-2 py-1 gap-2">
         <Toolbar
-          canGoBack={activeTab.historyIndex > 0}
-          canGoForward={activeTab.historyIndex < activeTab.history.length - 1}
-          isLoading={isLoading}
-          onBack={handleBack}
-          onForward={handleForward}
-          onRefresh={handleRefresh}
-          onHome={handleHome}
+          canGoBack={false}
+          canGoForward={false}
+          isLoading={sessionStatus === "creating" || sessionStatus === "starting"}
+          onBack={() => {}}
+          onForward={() => {}}
+          onRefresh={() => {
+            if (currentUrl) {
+              handleClose().then(() => {
+                setTimeout(() => createSession(currentUrl), 500);
+              });
+            }
+          }}
+          onHome={handleClose}
         />
         <AddressBar
           ref={addressBarRef}
-          url={displayUrl}
-          isLoading={isLoading}
-          onNavigate={handleNewTabNavigate}
+          url={currentUrl}
+          isLoading={sessionStatus === "creating" || sessionStatus === "starting"}
+          onNavigate={(val) => {
+            handleNavigate(val);
+          }}
           onFocusChange={setAddressFocused}
         />
         <div className="flex items-center gap-1 px-1">
@@ -365,20 +205,11 @@ export default function BrowserFrame() {
         </div>
       </div>
 
-      {activeTab.searchQuery ? (
-        <SearchResults
-          query={activeTab.searchQuery}
-          onNavigate={handleNavigate}
-        />
-      ) : (
-        <BrowserContent
-          url={activeTab.url}
-          onNavigate={handleIframeNavigate}
-          onTitleChange={(title) => updateTab(activeTabId, { title })}
-          onLoadStart={() => setIsLoading(true)}
-          onLoadEnd={() => setIsLoading(false)}
-        />
-      )}
+      <VirtualBrowser
+        session={session}
+        onNavigate={handleNavigate}
+        onClose={handleClose}
+      />
     </div>
   );
 }
