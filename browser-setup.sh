@@ -4,16 +4,22 @@
 
 echo "=== Installing dependencies ==="
 sudo apt-get update -qq
-sudo apt-get install -y -qq xvfb x11vnc novnc websockify fluxbox chromium-browser > /dev/null 2>&1
+sudo apt-get install -y -qq xvfb x11vnc novnc websockify fluxbox > /dev/null 2>&1
+
+# Chromium: snap version is the real browser on Ubuntu 22.04+
+if ! command -v chromium &> /dev/null && ! snap list chromium &> /dev/null 2>&1; then
+  echo "=== Installing Chromium via snap ==="
+  sudo snap install chromium 2>/dev/null || sudo apt-get install -y -qq chromium-browser 2>/dev/null
+fi
 
 echo "=== Installing cloudflared for public URL ==="
 if ! command -v cloudflared &> /dev/null; then
-  wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /usr/local/bin/cloudflared
-  chmod +x /usr/local/bin/cloudflared
+  sudo wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /usr/local/bin/cloudflared
+  sudo chmod +x /usr/local/bin/cloudflared
 fi
 
 echo "=== Killing old processes ==="
-pkill -f Xvfb 2>/dev/null; pkill -f fluxbox 2>/dev/null; pkill -f x11vnc 2>/dev/null; pkill -f websockify 2>/dev/null; pkill -f chromium 2>/dev/null
+pkill -f Xvfb 2>/dev/null; pkill -f fluxbox 2>/dev/null; pkill -f x11vnc 2>/dev/null; pkill -f websockify 2>/dev/null; pkill -f chromium 2>/dev/null; pkill -f chrome 2>/dev/null
 sleep 1
 
 echo "=== Starting Xvfb ==="
@@ -34,7 +40,9 @@ websockify --web=/usr/share/novnc 6080 localhost:5900 &
 sleep 1
 
 echo "=== Starting Chromium ==="
-chromium-browser --no-sandbox --disable-gpu --disable-dev-shm-usage --window-size=1920,1080 --user-data-dir=/tmp/chrome-profile about:blank &
+# Find chromium binary - snap installs to /snap/bin/chromium
+CHROME_BIN=$(command -v chromium 2>/dev/null || command -v /snap/bin/chromium 2>/dev/null || command -v chromium-browser 2>/dev/null || echo "/snap/bin/chromium")
+$CHROME_BIN --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-software-rasterizer --window-size=1920,1080 --user-data-dir=/tmp/chrome-profile about:blank &
 sleep 3
 
 echo ""
