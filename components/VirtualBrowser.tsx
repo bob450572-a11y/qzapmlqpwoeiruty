@@ -15,7 +15,7 @@ interface VirtualBrowserProps {
   onClose: () => void;
 }
 
-function IdleScreen({ onStart }: { onStart: () => void }) {
+function IdleScreen({ onNavigate }: { onNavigate: (url: string) => void }) {
   return (
     <div className="flex-1 flex items-center justify-center bg-white">
       <div className="text-center px-4 max-w-md">
@@ -38,7 +38,7 @@ function IdleScreen({ onStart }: { onStart: () => void }) {
           ].map((site) => (
             <button
               key={site.name}
-              onClick={() => onStart.call?.(site.url) || window.dispatchEvent(
+              onClick={() => window.dispatchEvent(
                 new CustomEvent("__navigate", { detail: { url: site.url } })
               )}
               className="flex items-center gap-2 p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors text-left"
@@ -119,7 +119,7 @@ function ErrorScreen({ error, onRetry, onHome }: { error: string; onRetry: () =>
 
 export default function VirtualBrowser({ session, onNavigate, onClose }: VirtualBrowserProps) {
   if (!session || session.status === "idle") {
-    return <IdleScreen onStart={onNavigate} />;
+    return <IdleScreen onNavigate={onNavigate} />;
   }
 
   if (session.status === "creating" || session.status === "starting") {
@@ -153,5 +153,5 @@ export default function VirtualBrowser({ session, onNavigate, onClose }: Virtual
     );
   }
 
-  return <IdleScreen onStart={onNavigate} />;
+  return <IdleScreen onNavigate={onNavigate} />;
 }
