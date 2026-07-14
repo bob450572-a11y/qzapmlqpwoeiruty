@@ -1,0 +1,16 @@
+{
+  "name": "Virtual Browser",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "postCreateCommand": "chmod +x browser-setup.sh && bash browser-setup.sh",
+  "forwardPorts": [6080, 9222],
+  "portsAttributes": {
+    "6080": {
+      "label": "Virtual Browser (noVNC)",
+      "onAutoForward": "openBrowser"
+    },
+    "9222": {
+      "label": "Chrome DevTools",
+      "onAutoForward": "silent"
+    }
+  }
+}

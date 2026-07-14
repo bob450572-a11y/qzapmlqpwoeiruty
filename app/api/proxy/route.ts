@@ -114,6 +114,42 @@ function rewriteResourceUrls(html: string, origin: string): string {
 const NAVIGATOR_SCRIPT = `
 <script>
 (function(){
+  try {
+    var __realTop = window.top;
+    var __realParent = window.parent;
+    var __realFrames = window.frames;
+    var __realSelf = window.self;
+
+    Object.defineProperty(window, 'top', {
+      get: function(){ return window; },
+      configurable: true,
+      enumerable: true
+    });
+    Object.defineProperty(window, 'parent', {
+      get: function(){ return window; },
+      configurable: true,
+      enumerable: true
+    });
+    Object.defineProperty(window, 'self', {
+      get: function(){ return window; },
+      configurable: true,
+      enumerable: true
+    });
+    Object.defineProperty(window, 'frames', {
+      get: function(){ return [window]; },
+      configurable: true,
+      enumerable: true
+    });
+
+    window.__sendToParent = function(data) {
+      try { __realParent.postMessage(data, '*'); } catch(e){}
+    };
+  } catch(e){
+    window.__sendToParent = function(data) {
+      try { window.parent.postMessage(data, '*'); } catch(e){}
+    };
+  }
+
   var fakeOrigin = '__ORIGIN__';
   var proxyBase = '/api/proxy?url=';
 
@@ -151,9 +187,9 @@ const NAVIGATOR_SCRIPT = `
     search: fakeSearch,
     hash: fakeHash,
     ancestorOrigins: { length: 0 },
-    assign: function(u){ window.parent.postMessage({__nav:true,url:u},'*'); },
-    replace: function(u){ window.parent.postMessage({__nav:true,url:u},'*'); },
-    reload: function(){ window.parent.postMessage({__nav:true,url:fakeOrigin + fakeLocation.pathname + fakeLocation.search},'*'); },
+    assign: function(u){ window.__sendToParent({__nav:true,url:u}); },
+    replace: function(u){ window.__sendToParent({__nav:true,url:u}); },
+    reload: function(){ window.__sendToParent({__nav:true,url:fakeOrigin + fakeLocation.pathname + fakeLocation.search}); },
     toString: function(){ return this.href; }
   };
 
@@ -181,7 +217,7 @@ const NAVIGATOR_SCRIPT = `
         return undefined;
       },
       set:function(t,k,v){
-        if(k==='href'){window.parent.postMessage({__nav:true,url:v},'*');return true;}
+        if(k==='href'){window.__sendToParent({__nav:true,url:v});return true;}
         return false;
       }
     });
@@ -189,7 +225,7 @@ const NAVIGATOR_SCRIPT = `
     try {
       Object.defineProperty(window, 'location', {
         get: function(){ return fakeLocation; },
-        set: function(u){ window.parent.postMessage({__nav:true,url:u},'*'); },
+        set: function(u){ window.__sendToParent({__nav:true,url:u}); },
         configurable: true
       });
     } catch(e2){}
@@ -209,9 +245,9 @@ const NAVIGATOR_SCRIPT = `
       fullUrl = a.href;
     }
     if (a.target === '_blank' || e.ctrlKey || e.metaKey) {
-      window.parent.postMessage({__nav:true, url: fullUrl, newTab: true}, '*');
+      window.__sendToParent({__nav:true, url: fullUrl, newTab: true});
     } else {
-      window.parent.postMessage({__nav:true, url: fullUrl}, '*');
+      window.__sendToParent({__nav:true, url: fullUrl});
     }
   }, true);
 
@@ -236,7 +272,7 @@ const NAVIGATOR_SCRIPT = `
       var qs = params.toString();
       if (qs) u.search = (u.search ? u.search + '&' : '?') + qs;
     }
-    window.parent.postMessage({__nav:true, url: u.href}, '*');
+    window.__sendToParent({__nav:true, url: u.href});
   }, true);
 
   try {
@@ -270,12 +306,12 @@ const NAVIGATOR_SCRIPT = `
   try {
     var origAssign = history.pushState;
     history.pushState = function() {
-      window.parent.postMessage({__nav:true, url: arguments[2] || fakeLocation.href}, '*');
+      window.__sendToParent({__nav:true, url: arguments[2] || fakeLocation.href});
       return origAssign.apply(this, arguments);
     };
     var origReplace = history.replaceState;
     history.replaceState = function() {
-      window.parent.postMessage({__nav:true, url: arguments[2] || fakeLocation.href}, '*');
+      window.__sendToParent({__nav:true, url: arguments[2] || fakeLocation.href});
       return origReplace.apply(this, arguments);
     };
   } catch(e){}
@@ -398,7 +434,7 @@ code{background:#f1f3f4;padding:2px 8px;border-radius:4px;font-size:12px;word-br
 <h1>This site can&#39;t be reached</h1>
 <p><code>${host}</code></p>
 <p>The site refused the connection, timed out, or is unreachable from our server.</p>
-<button class="btn" onclick="window.parent.postMessage({__nav:true,url:window.location.href},'*')">Try Again</button>
+<button class="btn" onclick="window.__sendToParent?window.__sendToParent({__nav:true,url:window.location.href}):window.parent.postMessage({__nav:true,url:window.location.href},'*')">Try Again</button>
 <p class="err">${msg}</p>
 </div></body></html>`;
 
